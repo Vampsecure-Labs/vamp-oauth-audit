@@ -1,6 +1,6 @@
 # © VampSecure Studios — VampSecure Labs Security Research Division
 """
-vamp-oauth-audit v1.0
+vamp-oauth-audit v1.1
 Auditor de flujos OAuth 2.0 y OIDC.
 Detecta vulnerabilidades en configuraciones de autorización, tokens JWT,
 endpoints activos y validación de redirect_uri.
@@ -33,7 +33,7 @@ from rich.padding import Padding
 # Constantes
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.0"
+VERSION = "1.1"
 BANNER = f"[bold red]vamp-oauth-audit[/bold red] [dim]v{VERSION}[/dim] · [dim]VampSecure Labs Security Research Division[/dim]"
 
 # Colores por severidad para Rich
@@ -944,6 +944,339 @@ async def fase_redirect_uri(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Fase 6 — Degradación PKCE y cumplimiento RFC 9700
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def audit_pkce(
+    session: aiohttp.ClientSession,
+    auth_endpoint: str,
+    client_id: str,
+    args: argparse.Namespace,
+) -> List[Hallazgo]:
+    """
+    Fase 6: Comprobaciones de degradación PKCE y cumplimiento RFC 9700.
+    Detecta CVE-2025-4144 (downgrade a plain), ausencia de enforcement,
+    falta de validación de state y validación laxa de redirect_uri.
+    """
+    hallazgos: List[Hallazgo] = []
+
+    if not auth_endpoint or not client_id:
+        return hallazgos
+
+    console.print(f"  [dim]→ Prueba PKCE/RFC9700: {auth_endpoint}[/dim]")
+
+    # ── OAUTH-PKCE-001: PKCE downgrade attack (CVE-2025-4144) ──────────────
+    # Enviar solicitud con code_challenge_method=plain en lugar de S256
+    params_plain = {
+        "response_type": "code",
+        "client_id": client_id,
+        "code_challenge": "dGVzdA",
+        "code_challenge_method": "plain",
+        "redirect_uri": "https://audit.vampsecure.test/callback",
+        "state": "audit_pkce_vsl",
+    }
+    url_plain = f"{auth_endpoint}?{urlencode(params_plain)}"
+    try:
+        async with session.head(
+            url_plain,
+            timeout=aiohttp.ClientTimeout(total=8),
+            allow_redirects=False,
+        ) as resp:
+            location = resp.headers.get("Location", "")
+            # Si el servidor acepta plain y emite código de autorización → vulnerable
+            if resp.status in (301, 302, 303, 307, 308) and "code=" in location:
+                hallazgos.append(Hallazgo(
+                    id="OAUTH-PKCE-001",
+                    severidad="CRITICAL",
+                    fase="PKCE",
+                    descripcion="PKCE downgrade attack — servidor acepta code_challenge_method=plain (CVE-2025-4144)",
+                    detalle=(
+                        f"El servidor aceptó code_challenge_method=plain en {auth_endpoint}. "
+                        "Un atacante puede forzar el uso de plain (sin hash) y recuperar el "
+                        "code_verifier interceptando la URI de redirección, anulando la protección PKCE. "
+                        "CVE-2025-4144."
+                    ),
+                    remediacion=(
+                        "Rechazar code_challenge_method=plain en el authorization endpoint. "
+                        "Aceptar únicamente S256 (RFC 7636 §4.2). "
+                        "Actualizar el servidor de autorización a una versión que aplique RFC 9700."
+                    ),
+                ))
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        console.print(f"  [dim]  ↳ Error en prueba PKCE-001: {exc}[/dim]")
+
+    # ── OAUTH-PKCE-002: Ausencia de PKCE enforcement ────────────────────────
+    # Enviar solicitud sin code_challenge; si el servidor emite código → no exige PKCE
+    params_no_pkce = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": "https://audit.vampsecure.test/callback",
+        "state": "audit_pkce002_vsl",
+    }
+    url_no_pkce = f"{auth_endpoint}?{urlencode(params_no_pkce)}"
+    try:
+        async with session.head(
+            url_no_pkce,
+            timeout=aiohttp.ClientTimeout(total=8),
+            allow_redirects=False,
+        ) as resp:
+            location = resp.headers.get("Location", "")
+            if resp.status in (301, 302, 303, 307, 308) and "code=" in location:
+                hallazgos.append(Hallazgo(
+                    id="OAUTH-PKCE-002",
+                    severidad="HIGH",
+                    fase="PKCE",
+                    descripcion="Ausencia de PKCE enforcement — el servidor no exige code_challenge",
+                    detalle=(
+                        f"El servidor autorizó el flujo sin code_challenge en {auth_endpoint}. "
+                        "Sin PKCE obligatorio, los clientes públicos son vulnerables a "
+                        "ataques de interceptación de código de autorización."
+                    ),
+                    remediacion=(
+                        "Requerir PKCE (RFC 7636) con method=S256 para todos los clientes públicos. "
+                        "Rechazar solicitudes de authorization code sin code_challenge. "
+                        "Referencia: RFC 9700 §2.1.1."
+                    ),
+                ))
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        console.print(f"  [dim]  ↳ Error en prueba PKCE-002: {exc}[/dim]")
+
+    # ── OAUTH-RFC9700-001: Ausencia de parámetro state ──────────────────────
+    # RFC 9700 §2.1: el AS DEBE rechazar peticiones sin state o con valores predecibles
+    params_no_state = {
+        "response_type": "code",
+        "client_id": client_id,
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "code_challenge_method": "S256",
+        "redirect_uri": "https://audit.vampsecure.test/callback",
+    }
+    url_no_state = f"{auth_endpoint}?{urlencode(params_no_state)}"
+    try:
+        async with session.head(
+            url_no_state,
+            timeout=aiohttp.ClientTimeout(total=8),
+            allow_redirects=False,
+        ) as resp:
+            location = resp.headers.get("Location", "")
+            if resp.status in (301, 302, 303, 307, 308) and "code=" in location:
+                hallazgos.append(Hallazgo(
+                    id="OAUTH-RFC9700-001",
+                    severidad="HIGH",
+                    fase="PKCE",
+                    descripcion="Parámetro state no validado — servidor autoriza sin state (RFC 9700 §2.1)",
+                    detalle=(
+                        f"El servidor emitió un código de autorización sin parámetro state en {auth_endpoint}. "
+                        "RFC 9700 §2.1 requiere que el AS rechace o advierta sobre solicitudes sin state "
+                        "para prevenir ataques CSRF en flujos de autorización."
+                    ),
+                    remediacion=(
+                        "Exigir el parámetro state en todas las solicitudes de autorización. "
+                        "Validar que el state recibido en el callback coincide con el enviado. "
+                        "Referencia: RFC 9700 §2.1, RFC 6749 §10.12."
+                    ),
+                ))
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        console.print(f"  [dim]  ↳ Error en prueba RFC9700-001: {exc}[/dim]")
+
+    # ── OAUTH-RFC9700-002: Redirect URI lax matching ─────────────────────────
+    # Probar variantes del hostname del endpoint con subdominio o path extra
+    parsed_ep = urlparse(auth_endpoint)
+    base_host = parsed_ep.hostname or "example.com"
+    uri_lax_variants = [
+        f"https://sub.{base_host}/callback",
+        f"https://{base_host}/callback/extra",
+        f"https://{base_host}.evil.test/callback",
+    ]
+    for uri_lax in uri_lax_variants:
+        params_lax = {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": uri_lax,
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256",
+            "state": "audit_redir_lax_vsl",
+        }
+        url_lax = f"{auth_endpoint}?{urlencode(params_lax)}"
+        try:
+            async with session.head(
+                url_lax,
+                timeout=aiohttp.ClientTimeout(total=8),
+                allow_redirects=False,
+            ) as resp:
+                location = resp.headers.get("Location", "")
+                if resp.status in (301, 302, 303, 307, 308) and "code=" in location:
+                    hallazgos.append(Hallazgo(
+                        id="OAUTH-RFC9700-002",
+                        severidad="HIGH",
+                        fase="PKCE",
+                        descripcion="Redirect URI con validación laxa — servidor acepta variantes no registradas",
+                        detalle=(
+                            f"El servidor aceptó redirect_uri={uri_lax!r} como variante no registrada. "
+                            "La validación de redirect_uri permite subdominios o paths adicionales, "
+                            "facilitando ataques de redirección del código de autorización."
+                        ),
+                        remediacion=(
+                            "Implementar validación estricta por coincidencia exacta de redirect_uri. "
+                            "No permitir coincidencias por prefijo, wildcard ni subdominio. "
+                            "RFC 6749 §3.1.2, RFC 9700 §2.1."
+                        ),
+                    ))
+                    break  # Un hallazgo es suficiente para este check
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            console.print(f"  [dim]  ↳ Error en prueba RFC9700-002 ({uri_lax}): {exc}[/dim]")
+
+    # ── OAUTH-SCOPE-001: Scope escalation probe ──────────────────────────────
+    # Solicitar scopes no estándar combinados (admin + openid + email + profile)
+    scopes_escalados = ["admin", "openid", "email", "profile"]
+    params_scope = {
+        "response_type": "code",
+        "client_id": client_id,
+        "scope": " ".join(scopes_escalados),
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+        "code_challenge_method": "S256",
+        "redirect_uri": "https://audit.vampsecure.test/callback",
+        "state": "audit_scope_vsl",
+    }
+    url_scope = f"{auth_endpoint}?{urlencode(params_scope)}"
+    try:
+        async with session.head(
+            url_scope,
+            timeout=aiohttp.ClientTimeout(total=8),
+            allow_redirects=False,
+        ) as resp:
+            location = resp.headers.get("Location", "")
+            if resp.status in (301, 302, 303, 307, 308) and "code=" in location:
+                hallazgos.append(Hallazgo(
+                    id="OAUTH-SCOPE-001",
+                    severidad="MEDIUM",
+                    fase="PKCE",
+                    descripcion="Scope escalation probe — servidor acepta scopes de alto privilegio sin validación",
+                    detalle=(
+                        f"El servidor procesó una solicitud con scopes {scopes_escalados!r} en {auth_endpoint} "
+                        "sin rechazarla con invalid_scope. Los scopes de alto privilegio como 'admin' "
+                        "no deberían concederse sin validación explícita del cliente."
+                    ),
+                    remediacion=(
+                        "Validar los scopes solicitados contra los permisos del cliente registrado. "
+                        "Rechazar scopes no permitidos con error invalid_scope (RFC 6749 §5.2). "
+                        "Aplicar principio de mínimo privilegio en la configuración del cliente."
+                    ),
+                ))
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        console.print(f"  [dim]  ↳ Error en prueba SCOPE-001: {exc}[/dim]")
+
+    return hallazgos
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fase 7 — Comprobaciones adicionales del token endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def audit_token_endpoint(
+    session: aiohttp.ClientSession,
+    url: str,
+    args: argparse.Namespace,
+) -> List[Hallazgo]:
+    """
+    Fase 7: Comprobaciones adicionales del token endpoint.
+    Detecta transmisión insegura de client_secret en query string (RFC 6749 §2.3.1)
+    y tokens de acceso de larga duración sin mecanismo de rotación.
+    """
+    hallazgos: List[Hallazgo] = []
+
+    if not url:
+        return hallazgos
+
+    console.print(f"  [dim]→ Comprobaciones adicionales token endpoint: {url}[/dim]")
+
+    # ── OAUTH-TOKEN-001: client_secret en query string ───────────────────────
+    # RFC 6749 §2.3.1 prohíbe client_secret en parámetros de URL; se registra en logs
+    test_client_id = getattr(args, "client_id", None) or "audit_test_client"
+    params_qs = {
+        "grant_type": "authorization_code",
+        "code": "audit_test_code_vsl",
+        "client_id": test_client_id,
+        "client_secret": "audit_test_secret_vsl",
+        "redirect_uri": "https://audit.vampsecure.test/callback",
+    }
+    url_con_secret = f"{url}?{urlencode(params_qs)}"
+    try:
+        async with session.post(
+            url_con_secret,
+            data={},
+            timeout=aiohttp.ClientTimeout(total=8),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        ) as resp:
+            cuerpo = ""
+            try:
+                cuerpo = await resp.text(errors="replace")
+            except Exception:
+                pass
+            # Si el servidor no devuelve 405 Method Not Allowed y procesa la petición
+            # (incluyendo respuestas de error OAuth como invalid_grant/invalid_client),
+            # significa que leyó los parámetros de la query string, lo cual está prohibido
+            if resp.status != 405 and (
+                "invalid_grant" in cuerpo.lower()
+                or "invalid_client" in cuerpo.lower()
+                or "access_token" in cuerpo.lower()
+                or resp.status == 200
+            ):
+                hallazgos.append(Hallazgo(
+                    id="OAUTH-TOKEN-001",
+                    severidad="HIGH",
+                    fase="Token",
+                    descripcion="Token endpoint acepta client_secret en query string (RFC 6749 §2.3.1)",
+                    detalle=(
+                        f"El token endpoint {url!r} respondió con HTTP {resp.status} a una petición "
+                        "con client_secret en la query string. RFC 6749 §2.3.1 prohíbe transmitir "
+                        "credenciales de cliente en parámetros de URL (se registran en logs de servidor, "
+                        "proxies y cabeceras Referer)."
+                    ),
+                    remediacion=(
+                        "Rechazar cualquier petición que incluya client_secret en la query string. "
+                        "Aceptar credenciales de cliente solo en Authorization header (HTTP Basic) "
+                        "o en el body con Content-Type: application/x-www-form-urlencoded. "
+                        "RFC 6749 §2.3.1."
+                    ),
+                ))
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        console.print(f"  [dim]  ↳ Error en prueba TOKEN-001: {exc}[/dim]")
+
+    # ── OAUTH-TOKEN-002: Tokens de larga duración sin rotación ───────────────
+    # Si el access_token proporcionado tiene exp a más de 1 hora → informativo MEDIUM
+    access_token_raw = getattr(args, "access_token", None)
+    if access_token_raw:
+        try:
+            _, payload = decodificar_jwt(access_token_raw)
+            exp = payload.get("exp")
+            iat = payload.get("iat")
+            if exp and iat:
+                ttl = int(exp) - int(iat)
+                if ttl > 3600:
+                    horas = ttl / 3600
+                    hallazgos.append(Hallazgo(
+                        id="OAUTH-TOKEN-002",
+                        severidad="MEDIUM",
+                        fase="Token",
+                        descripcion="Access token de larga duración — TTL superior a 1 hora",
+                        detalle=(
+                            f"El access_token tiene TTL de {horas:.1f}h ({ttl}s). "
+                            "Tokens de larga duración amplían la ventana de ataque si son comprometidos. "
+                            "La ausencia de refresh token con rotación impide la invalidación rápida."
+                        ),
+                        remediacion=(
+                            "Reducir el TTL del access_token a ≤15min para APIs sensibles (≤1h como máximo). "
+                            "Implementar refresh tokens de corta duración con rotación (RFC 6749 §6). "
+                            "Habilitar token introspection para revocación bajo demanda (RFC 7662)."
+                        ),
+                    ))
+        except (ValueError, Exception) as exc:
+            console.print(f"  [dim]  ↳ No se pudo analizar access_token para TOKEN-002: {exc}[/dim]")
+
+    return hallazgos
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Calificación global
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1116,7 +1449,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vamp-oauth-audit",
         description=(
-            "vamp-oauth-audit v1.0 — Auditor de flujos OAuth 2.0 y OIDC\n"
+            "vamp-oauth-audit v1.1 — Auditor de flujos OAuth 2.0 y OIDC\n"
             "© VampSecure Studios — VampSecure Labs Security Research Division\n\n"
             "ADVERTENCIA: Usar solo en sistemas autorizados. El uso no autorizado es ilegal."
         ),
@@ -1180,6 +1513,13 @@ Ejemplos de uso:
     g_salida.add_argument("--quiet", action="store_true",
         help="Modo silencioso: solo mostrar tabla final y errores")
     g_salida.add_argument("--version", action="version", version=f"vamp-oauth-audit {VERSION}")
+
+    # Opciones de fase (v1.1)
+    g_fases = p.add_argument_group("Control de fases (v1.1)")
+    g_fases.add_argument("--skip-pkce", action="store_true",
+        help="Omitir la fase PKCE/RFC9700 (checks OAUTH-PKCE-001/002, OAUTH-RFC9700-001/002, OAUTH-SCOPE-001)")
+    g_fases.add_argument("--skip-token", action="store_true",
+        help="Omitir los checks adicionales del token endpoint (OAUTH-TOKEN-001/002)")
 
     return p
 
@@ -1308,6 +1648,20 @@ async def ejecutar_auditoria(args: argparse.Namespace) -> List[Hallazgo]:
                 console.print("\n[bold]Fase 5 — Validación redirect_uri[/bold]")
             h_redir = await fase_redirect_uri(session, auth_endpoint, client_id)
             todos_los_hallazgos.extend(h_redir)
+
+        # ── Fase 6: PKCE y RFC 9700 ──────────────────────────────────────────
+        if auth_endpoint and client_id and not getattr(args, "skip_pkce", False):
+            if not getattr(args, "quiet", False):
+                console.print("\n[bold]Fase 6 — PKCE downgrade y RFC 9700[/bold]")
+            h_pkce = await audit_pkce(session, auth_endpoint, client_id, args)
+            todos_los_hallazgos.extend(h_pkce)
+
+        # ── Fase 7: Comprobaciones adicionales token endpoint ────────────────
+        if token_endpoint_efectivo and not getattr(args, "skip_token", False):
+            if not getattr(args, "quiet", False):
+                console.print("\n[bold]Fase 7 — Token endpoint (checks adicionales)[/bold]")
+            h_tok_extra = await audit_token_endpoint(session, token_endpoint_efectivo, args)
+            todos_los_hallazgos.extend(h_tok_extra)
 
     return todos_los_hallazgos
 
