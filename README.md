@@ -1,3 +1,4 @@
+<!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
 # vamp-oauth-audit
 
 **OAuth 2.0 and OIDC Security Flow Auditor** — VampSecure Labs Security Research Division
@@ -11,6 +12,8 @@ Analiza endpoints de discovery, URLs de autorización, tokens JWT, token endpoin
 
 ```bash
 pip install vamp-oauth-audit
+# o con Homebrew:
+brew install vampsecure-labs/labs/vamp-oauth-audit
 ```
 
 O desde el repositorio:
@@ -131,7 +134,7 @@ vamp-oauth-audit \
 
 ```
 ╭──────────────────────────────────────────────────────────────────╮
-│ vamp-oauth-audit v1.0 · VampSecure Labs Security Research Division│
+│ vamp-oauth-audit v1.1 · VampSecure Labs Security Research Division│
 ╰──────────────────────────────────────────────────────────────────╯
 
 Fase 1 — OIDC Discovery
@@ -168,8 +171,13 @@ El uso de vamp-oauth-audit en sistemas sin autorización puede constituir un del
 
 ## Licencia
 
-MIT License — © VampSecure Studios
+AGPL-3.0 License — © VampSecure Studios
 
 ---
 
 *© VampSecure Studios — VampSecure Labs Security Research Division*
+
+---
+
+## Versión
+v1.1 — VampSecure Labs Security Research Division
