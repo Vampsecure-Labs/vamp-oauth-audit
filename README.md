@@ -1,4 +1,6 @@
 <!-- © VampSecure Studios — VampSecure Labs Security Research Division -->
+
+  <img src="https://github.com/Vampsecure-Labs/vamp-oauth-audit/actions/workflows/ci.yml/badge.svg" alt="CI"/>
 # vamp-oauth-audit
 
 **OAuth 2.0 and OIDC Security Flow Auditor** — VampSecure Labs Security Research Division
