@@ -13,10 +13,9 @@ import argparse
 import asyncio
 import base64
 import json
-import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse, urlencode, quote
@@ -200,7 +199,7 @@ async def fase_discovery(
             fase="Discovery",
             descripcion="Implicit flow soportado por el servidor",
             detalle=(
-                f"response_types_supported incluye 'token'. "
+                "response_types_supported incluye 'token'. "
                 "El implicit flow expone access_tokens en la URL (fragment) y es obsoleto en OAuth 2.1."
             ),
             remediacion=(
@@ -281,7 +280,7 @@ def fase_auth_url(
     try:
         parsed = urlparse(url_str)
         params = parse_qs(parsed.query, keep_blank_values=True)
-    except Exception as exc:
+    except Exception:
         return hallazgos
 
     def param(key: str) -> Optional[str]:
@@ -1362,7 +1361,7 @@ def generar_html(
     )
 
     # Fases únicas detectadas
-    fases_detectadas = sorted(set(h.fase for h in hallazgos))
+    sorted(set(h.fase for h in hallazgos))
 
     html = f"""<!DOCTYPE html>
 <html lang="es">
@@ -1588,7 +1587,7 @@ async def ejecutar_auditoria(args: argparse.Namespace) -> List[Hallazgo]:
     if getattr(args, "no_ssl_verify", False) or getattr(args, "proxy", None):
         connector_kwargs["ssl"] = False
 
-    proxy = getattr(args, "proxy", None)
+    getattr(args, "proxy", None)
 
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(**connector_kwargs),
