@@ -143,7 +143,7 @@ vamp-oauth-audit \
 
 ```
 ╭──────────────────────────────────────────────────────────────────╮
-│ vamp-oauth-audit v1.2 · VampSecure Labs Security Research Division│
+│ vamp-oauth-audit v1.1 · VampSecure Labs Security Research Division│
 ╰──────────────────────────────────────────────────────────────────╯
 
 Phase 1 — OIDC Discovery
@@ -179,7 +179,7 @@ $ vamp-oauth-audit --target auth.example.com \
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│  vamp-oauth-audit v1.2 · VampSecure Labs Security Research Division          │
+│  vamp-oauth-audit v1.1 · VampSecure Labs Security Research Division          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 Phase 1 — OIDC Discovery
@@ -420,7 +420,7 @@ vamp-oauth-audit \
 
 ```
 ╭──────────────────────────────────────────────────────────────────╮
-│ vamp-oauth-audit v1.2 · VampSecure Labs Security Research Division│
+│ vamp-oauth-audit v1.1 · VampSecure Labs Security Research Division│
 ╰──────────────────────────────────────────────────────────────────╯
 
 Fase 1 — OIDC Discovery
@@ -456,7 +456,7 @@ $ vamp-oauth-audit --target auth.example.com \
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│  vamp-oauth-audit v1.2 · VampSecure Labs Security Research Division          │
+│  vamp-oauth-audit v1.1 · VampSecure Labs Security Research Division          │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 Fase 1 — OIDC Discovery
